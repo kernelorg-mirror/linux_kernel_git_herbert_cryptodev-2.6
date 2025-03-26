@@ -51,6 +51,7 @@ struct skcipher_request {
 };
 
 struct crypto_skcipher {
+	struct crypto_sync_skcipher *fb;
 	unsigned int reqsize;
 
 	struct crypto_tfm base;
@@ -218,13 +219,25 @@ struct lskcipher_alg {
  * all users have the correct skcipher tfm for doing on-stack requests.
  */
 #define SYNC_SKCIPHER_REQUEST_ON_STACK(name, _tfm) \
-	char __##name##_desc[sizeof(struct skcipher_request) + \
-			     MAX_SYNC_SKCIPHER_REQSIZE \
-			    ] CRYPTO_MINALIGN_ATTR; \
-	struct skcipher_request *name = \
-		(((struct skcipher_request *)__##name##_desc)->base.tfm = \
-			crypto_sync_skcipher_tfm((_tfm)), \
-		 (void *)__##name##_desc)
+	SKCIPHER_REQUEST_ON_STACK(name, &(_tfm)->base, 0)
+
+#define SKCIPHER_REQUEST_ON_STACK_1(name, tfm, extra) \
+	char __##name##_req[ALIGN(sizeof(struct skcipher_request) + \
+				  MAX_SYNC_SKCIPHER_REQSIZE, \
+				  CRYPTO_MINALIGN) + \
+			    extra] CRYPTO_MINALIGN_ATTR; \
+	struct skcipher_request *name = skcipher_request_on_stack_init( \
+		__##name##_req, (tfm))
+
+#define SKCIPHER_REQUEST_ON_STACK_0(name, tfm) \
+	SKCIPHER_REQUEST_ON_STACK_1(name, tfm, 0)
+
+#define SKCIPHER_REQUEST_ON_STACK(name, tfm, ...) \
+	CONCATENATE(SKCIPHER_REQUEST_ON_STACK_, COUNT_ARGS(__VA_ARGS__))( \
+		name, tfm, ##__VA_ARGS__)
+
+#define SKCIPHER_REQUEST_CLONE(name, gfp) \
+	skcipher_request_clone(name, sizeof(__##name##_req), gfp)
 
 /**
  * DOC: Symmetric Key Cipher API
@@ -818,6 +831,7 @@ static inline void skcipher_request_set_tfm(struct skcipher_request *req,
 					    struct crypto_skcipher *tfm)
 {
 	req->base.tfm = crypto_skcipher_tfm(tfm);
+	req->base.flags &= ~CRYPTO_TFM_REQ_ON_STACK;
 }
 
 static inline void skcipher_request_set_sync_tfm(struct skcipher_request *req,
@@ -843,28 +857,46 @@ static inline struct skcipher_request *skcipher_request_cast(
  *
  * Return: allocated request handle in case of success, or NULL if out of memory
  */
-static inline struct skcipher_request *skcipher_request_alloc_noprof(
-	struct crypto_skcipher *tfm, gfp_t gfp)
+static inline struct skcipher_request *skcipher_request_alloc_extra_noprof(
+	struct crypto_skcipher *tfm, size_t extra, gfp_t gfp)
 {
 	struct skcipher_request *req;
+	unsigned int len;
 
-	req = kmalloc_noprof(sizeof(struct skcipher_request) +
-			     crypto_skcipher_reqsize(tfm), gfp);
+	len = ALIGN(sizeof(*req) + crypto_skcipher_reqsize(tfm), CRYPTO_MINALIGN);
+	if (check_add_overflow(len, extra, &len))
+		return NULL;
+
+	req = kmalloc_noprof(len, gfp);
 
 	if (likely(req))
 		skcipher_request_set_tfm(req, tfm);
 
 	return req;
 }
-#define skcipher_request_alloc(...)	alloc_hooks(skcipher_request_alloc_noprof(__VA_ARGS__))
+#define skcipher_request_alloc(tfm, gfp)	alloc_hooks(skcipher_request_alloc_extra_noprof(tfm, 0, gfp))
 
 /**
- * skcipher_request_free() - zeroize and free request data structure
- * @req: request data structure cipher handle to be freed
+ * skcipher_request_alloc_extra() - allocate request with extra memory
+ * @tfm: cipher handle to be registered with the request
+ * @extra:	amount of extra memory
+ * @gfp: memory allocation flag that is handed to kmalloc by the API call.
+ *
+ * Allocate the request data structure with extra memory that must be used
+ * with the skcipher encrypt and decrypt API calls. During the allocation,
+ * the provided skcipher handle is registered in the request data structure.
+ *
+ * Return: allocated request handle in case of success, or NULL if out of memory
  */
-static inline void skcipher_request_free(struct skcipher_request *req)
+#define skcipher_request_alloc_extra(...)	alloc_hooks(skcipher_request_alloc_extra_noprof(__VA_ARGS__))
+
+static inline void *skcipher_request_extra(struct skcipher_request *req)
 {
-	kfree_sensitive(req);
+	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+	size_t len;
+
+	len = ALIGN(sizeof(*req) + crypto_skcipher_reqsize(tfm), CRYPTO_MINALIGN);
+	return (void *)((char *)req + len);
 }
 
 static inline void skcipher_request_zero(struct skcipher_request *req)
@@ -873,6 +905,12 @@ static inline void skcipher_request_zero(struct skcipher_request *req)
 
 	memzero_explicit(req, sizeof(*req) + crypto_skcipher_reqsize(tfm));
 }
+
+/**
+ * skcipher_request_free() - zeroize and free request data structure
+ * @req: request data structure cipher handle to be freed
+ */
+void skcipher_request_free(struct skcipher_request *req);
 
 /**
  * skcipher_request_set_callback() - set asynchronous callback function
@@ -904,9 +942,7 @@ static inline void skcipher_request_set_callback(struct skcipher_request *req,
 						 crypto_completion_t compl,
 						 void *data)
 {
-	req->base.complete = compl;
-	req->base.data = data;
-	req->base.flags = flags;
+	crypto_request_set_callback(&req->base, flags, compl, data);
 }
 
 /**
@@ -934,6 +970,36 @@ static inline void skcipher_request_set_crypt(
 	req->dst = dst;
 	req->cryptlen = cryptlen;
 	req->iv = iv;
+}
+
+static inline bool skcipher_is_async(struct crypto_skcipher *tfm)
+{
+	return crypto_tfm_is_async(crypto_skcipher_tfm(tfm));
+}
+
+static inline struct skcipher_request *skcipher_request_on_stack_init(
+	char *buf, struct crypto_skcipher *tfm)
+{
+	struct skcipher_request *req;
+
+	req = (void *)buf;
+	skcipher_request_set_tfm(req, tfm);
+	req->base.flags = CRYPTO_TFM_REQ_ON_STACK;
+
+	return req;
+}
+
+static inline const char *crypto_skcipher_alg_name(struct crypto_skcipher *tfm)
+{
+	return crypto_tfm_alg_name(crypto_skcipher_tfm(tfm));
+}
+
+struct skcipher_request *skcipher_request_clone(struct skcipher_request *req,
+						size_t total, gfp_t gfp);
+
+static inline bool skcipher_req_on_stack(struct skcipher_request *req)
+{
+	return crypto_req_on_stack(&req->base);
 }
 
 #endif	/* _CRYPTO_SKCIPHER_H */

@@ -260,7 +260,7 @@ static inline void *skcipher_request_ctx_dma(struct skcipher_request *req)
 
 static inline u32 skcipher_request_flags(struct skcipher_request *req)
 {
-	return req->base.flags;
+	return crypto_request_flags(&req->base);
 }
 
 /* Helpers for simple block cipher modes of operation */

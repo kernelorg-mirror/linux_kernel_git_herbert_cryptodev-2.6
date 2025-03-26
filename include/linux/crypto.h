@@ -491,5 +491,27 @@ static inline bool crypto_tfm_is_async(struct crypto_tfm *tfm)
 	return tfm->__crt_alg->cra_flags & CRYPTO_ALG_ASYNC;
 }
 
+static inline bool crypto_req_on_stack(struct crypto_async_request *req)
+{
+	return req->flags & CRYPTO_TFM_REQ_ON_STACK;
+}
+
+static inline void crypto_request_set_callback(
+	struct crypto_async_request *req, u32 flags,
+	crypto_completion_t compl, void *data)
+{
+	u32 keep = CRYPTO_TFM_REQ_ON_STACK;
+
+	req->complete = compl;
+	req->data = data;
+	req->flags &= keep;
+	req->flags |= flags & ~keep;
+}
+
+static inline u32 crypto_request_flags(struct crypto_async_request *req)
+{
+	return req->flags & ~CRYPTO_TFM_REQ_ON_STACK;
+}
+
 #endif	/* _LINUX_CRYPTO_H */
 

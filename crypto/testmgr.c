@@ -16,11 +16,20 @@
  *    Copyright (c) 2010, Intel Corporation.
  */
 
+#include <crypto/acompress.h>
 #include <crypto/aead.h>
+#include <crypto/akcipher.h>
+#include <crypto/drbg.h>
 #include <crypto/hash.h>
-#include <crypto/skcipher.h>
+#include <crypto/internal/cipher.h>
+#include <crypto/internal/simd.h>
+#include <crypto/internal/skcipher.h>
+#include <crypto/kpp.h>
+#include <crypto/rng.h>
+#include <crypto/sig.h>
 #include <linux/err.h>
 #include <linux/fips.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/once.h>
 #include <linux/prandom.h>
@@ -28,14 +37,6 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uio.h>
-#include <crypto/rng.h>
-#include <crypto/drbg.h>
-#include <crypto/akcipher.h>
-#include <crypto/kpp.h>
-#include <crypto/acompress.h>
-#include <crypto/sig.h>
-#include <crypto/internal/cipher.h>
-#include <crypto/internal/simd.h>
 
 #include "internal.h"
 
@@ -3035,7 +3036,7 @@ static int test_skcipher_vec_cfg(int enc, const struct cipher_testvec *vec,
 	    req->dst != tsgls->dst.sgl_ptr ||
 	    crypto_skcipher_reqtfm(req) != tfm ||
 	    req->base.complete != crypto_req_done ||
-	    req->base.flags != req_flags ||
+	    skcipher_request_flags(req) ^ req_flags ||
 	    req->base.data != &wait) {
 		pr_err("alg: skcipher: %s %s corrupted request struct on test vector %s, cfg=\"%s\"\n",
 		       driver, op, vec_name, cfg->name);
@@ -3051,7 +3052,7 @@ static int test_skcipher_vec_cfg(int enc, const struct cipher_testvec *vec,
 			pr_err("alg: skcipher: changed 'req->base.tfm'\n");
 		if (req->base.complete != crypto_req_done)
 			pr_err("alg: skcipher: changed 'req->base.complete'\n");
-		if (req->base.flags != req_flags)
+		if (skcipher_request_flags(req) ^ req_flags)
 			pr_err("alg: skcipher: changed 'req->base.flags'\n");
 		if (req->base.data != &wait)
 			pr_err("alg: skcipher: changed 'req->base.data'\n");

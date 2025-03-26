@@ -39,6 +39,14 @@ static const struct crypto_type crypto_skcipher_type;
 
 static int skcipher_walk_next(struct skcipher_walk *walk);
 
+static inline bool skcipher_has_fb(struct crypto_skcipher *skcipher)
+{
+	struct skcipher_alg *alg = crypto_skcipher_alg(skcipher);
+
+	return skcipher_is_async(skcipher) &&
+	       !(alg->base.cra_flags & CRYPTO_ALG_INTERNAL);
+}
+
 static inline gfp_t skcipher_walk_gfp(struct skcipher_walk *walk)
 {
 	return walk->flags & SKCIPHER_WALK_SLEEP ? GFP_KERNEL : GFP_ATOMIC;
@@ -439,6 +447,8 @@ int crypto_skcipher_encrypt(struct skcipher_request *req)
 
 	if (crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		return -ENOKEY;
+	if (skcipher_req_on_stack(req) && skcipher_is_async(tfm))
+		return -EAGAIN;
 	if (alg->co.base.cra_type != &crypto_skcipher_type)
 		return crypto_lskcipher_encrypt_sg(req);
 	return alg->encrypt(req);
@@ -452,6 +462,8 @@ int crypto_skcipher_decrypt(struct skcipher_request *req)
 
 	if (crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		return -ENOKEY;
+	if (skcipher_req_on_stack(req) && skcipher_is_async(tfm))
+		return -EAGAIN;
 	if (alg->co.base.cra_type != &crypto_skcipher_type)
 		return crypto_lskcipher_decrypt_sg(req);
 	return alg->decrypt(req);
@@ -521,15 +533,22 @@ static void crypto_skcipher_exit_tfm(struct crypto_tfm *tfm)
 	struct crypto_skcipher *skcipher = __crypto_skcipher_cast(tfm);
 	struct skcipher_alg *alg = crypto_skcipher_alg(skcipher);
 
-	alg->exit(skcipher);
+	if (alg->exit)
+		alg->exit(skcipher);
+
+	if (skcipher_has_fb(skcipher))
+		crypto_free_sync_skcipher(skcipher->fb);
 }
 
 static int crypto_skcipher_init_tfm(struct crypto_tfm *tfm)
 {
 	struct crypto_skcipher *skcipher = __crypto_skcipher_cast(tfm);
 	struct skcipher_alg *alg = crypto_skcipher_alg(skcipher);
+	struct crypto_sync_skcipher *fb = NULL;
+	int err;
 
 	skcipher_set_needkey(skcipher);
+	skcipher->fb = container_of(skcipher, struct crypto_sync_skcipher, base);
 
 	if (tfm->__crt_alg->cra_type != &crypto_skcipher_type) {
 		unsigned am = crypto_skcipher_alignmask(skcipher);
@@ -543,13 +562,28 @@ static int crypto_skcipher_init_tfm(struct crypto_tfm *tfm)
 		return crypto_init_lskcipher_ops_sg(tfm);
 	}
 
-	if (alg->exit)
-		skcipher->base.exit = crypto_skcipher_exit_tfm;
+	if (skcipher_has_fb(skcipher)) {
+		fb = crypto_alloc_sync_skcipher(crypto_skcipher_alg_name(skcipher), 0, 0);
+		if (IS_ERR(fb))
+			return PTR_ERR(fb);
 
-	if (alg->init)
-		return alg->init(skcipher);
+		skcipher->fb = fb;
+	}
+
+	skcipher->base.exit = crypto_skcipher_exit_tfm;
+
+	if (!alg->init)
+		return 0;
+
+	err = alg->init(skcipher);
+	if (err)
+		goto out_free_fb;
 
 	return 0;
+
+out_free_fb:
+	crypto_free_sync_skcipher(fb);
+	return err;
 }
 
 static unsigned int crypto_skcipher_extsize(struct crypto_alg *alg)
@@ -884,6 +918,46 @@ err_free_inst:
 	return ERR_PTR(err);
 }
 EXPORT_SYMBOL_GPL(skcipher_alloc_instance_simple);
+
+void skcipher_request_free(struct skcipher_request *req)
+{
+	bool stack;
+
+	if (!req)
+		return;
+	stack = skcipher_req_on_stack(req);
+	skcipher_request_zero(req);
+	if (stack)
+		return;
+	kfree(req);
+}
+EXPORT_SYMBOL_GPL(skcipher_request_free);
+
+static inline void skcipher_request_set_fallback(struct skcipher_request *req)
+{
+	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+
+	skcipher_request_set_sync_tfm(req, tfm->fb);
+}
+
+struct skcipher_request *skcipher_request_clone(struct skcipher_request *req,
+						size_t total, gfp_t gfp)
+{
+	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+	struct skcipher_request *nreq;
+
+	nreq = kmalloc(total, gfp);
+	if (!nreq) {
+		skcipher_request_set_fallback(req);
+		return req;
+	}
+
+	memcpy(nreq, req, total);
+	skcipher_request_set_tfm(nreq, tfm);
+	skcipher_request_set_callback(nreq, req->base.flags, req->base.complete, req->base.data);
+	return nreq;
+}
+EXPORT_SYMBOL_GPL(skcipher_request_clone);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Symmetric key cipher type");
