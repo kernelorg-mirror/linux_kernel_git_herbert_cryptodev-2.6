@@ -11,6 +11,7 @@
 #include <linux/atomic.h>
 #include <linux/container_of.h>
 #include <linux/crypto.h>
+#include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -25,8 +26,6 @@
 #define CRYPTO_SKCIPHER_REQ_CONT	0x00000001
 /* Set this bit if the skcipher operation is not final. */
 #define CRYPTO_SKCIPHER_REQ_NOTFINAL	0x00000002
-
-struct scatterlist;
 
 /**
  *	struct skcipher_request - Symmetric key cipher request
@@ -44,6 +43,9 @@ struct skcipher_request {
 
 	struct scatterlist *src;
 	struct scatterlist *dst;
+
+	struct scatterlist src0;
+	struct scatterlist dst0;
 
 	struct crypto_async_request base;
 
@@ -968,6 +970,21 @@ static inline void skcipher_request_set_crypt(
 {
 	req->src = src;
 	req->dst = dst;
+	req->cryptlen = cryptlen;
+	req->iv = iv;
+}
+
+static inline void skcipher_request_set_folio(
+	struct skcipher_request *req,
+	struct folio *src, size_t soff, struct folio *dst, size_t doff,
+	unsigned int cryptlen, void *iv)
+{
+	req->src = &req->src0;
+	req->dst = &req->dst0;
+	sg_init_table(req->src, 1);
+	sg_set_folio(req->src, src, cryptlen, soff);
+	sg_init_table(req->dst, 1);
+	sg_set_folio(req->dst, dst, cryptlen, doff);
 	req->cryptlen = cryptlen;
 	req->iv = iv;
 }
