@@ -247,12 +247,11 @@ static int cts_cbc_encrypt(struct skcipher_request *req)
 	int cbc_blocks = DIV_ROUND_UP(req->cryptlen, AES_BLOCK_SIZE) - 2;
 	struct scatterlist *src = req->src, *dst = req->dst;
 	struct scatterlist sg_src[2], sg_dst[2];
-	struct skcipher_request subreq;
+	SKCIPHER_REQUEST_ON_STACK(subreq, tfm);
 	struct skcipher_walk walk;
 	int err;
 
-	skcipher_request_set_tfm(&subreq, tfm);
-	skcipher_request_set_callback(&subreq, skcipher_request_flags(req),
+	skcipher_request_set_callback(subreq, skcipher_request_flags(req),
 				      NULL, NULL);
 
 	if (req->cryptlen <= AES_BLOCK_SIZE) {
@@ -262,29 +261,29 @@ static int cts_cbc_encrypt(struct skcipher_request *req)
 	}
 
 	if (cbc_blocks > 0) {
-		skcipher_request_set_crypt(&subreq, req->src, req->dst,
+		skcipher_request_set_crypt(subreq, req->src, req->dst,
 					   cbc_blocks * AES_BLOCK_SIZE,
 					   req->iv);
 
-		err = cbc_encrypt(&subreq);
+		err = cbc_encrypt(subreq);
 		if (err)
 			return err;
 
 		if (req->cryptlen == AES_BLOCK_SIZE)
 			return 0;
 
-		dst = src = scatterwalk_ffwd(sg_src, req->src, subreq.cryptlen);
+		dst = src = scatterwalk_ffwd(sg_src, req->src, subreq->cryptlen);
 		if (req->dst != req->src)
 			dst = scatterwalk_ffwd(sg_dst, req->dst,
-					       subreq.cryptlen);
+					       subreq->cryptlen);
 	}
 
 	/* handle ciphertext stealing */
-	skcipher_request_set_crypt(&subreq, src, dst,
+	skcipher_request_set_crypt(subreq, src, dst,
 				   req->cryptlen - cbc_blocks * AES_BLOCK_SIZE,
 				   req->iv);
 
-	err = skcipher_walk_virt(&walk, &subreq, false);
+	err = skcipher_walk_virt(&walk, subreq, false);
 	if (err)
 		return err;
 
@@ -303,12 +302,11 @@ static int cts_cbc_decrypt(struct skcipher_request *req)
 	int cbc_blocks = DIV_ROUND_UP(req->cryptlen, AES_BLOCK_SIZE) - 2;
 	struct scatterlist *src = req->src, *dst = req->dst;
 	struct scatterlist sg_src[2], sg_dst[2];
-	struct skcipher_request subreq;
+	SKCIPHER_REQUEST_ON_STACK(subreq, tfm);
 	struct skcipher_walk walk;
 	int err;
 
-	skcipher_request_set_tfm(&subreq, tfm);
-	skcipher_request_set_callback(&subreq, skcipher_request_flags(req),
+	skcipher_request_set_callback(subreq, skcipher_request_flags(req),
 				      NULL, NULL);
 
 	if (req->cryptlen <= AES_BLOCK_SIZE) {
@@ -318,29 +316,29 @@ static int cts_cbc_decrypt(struct skcipher_request *req)
 	}
 
 	if (cbc_blocks > 0) {
-		skcipher_request_set_crypt(&subreq, req->src, req->dst,
+		skcipher_request_set_crypt(subreq, req->src, req->dst,
 					   cbc_blocks * AES_BLOCK_SIZE,
 					   req->iv);
 
-		err = cbc_decrypt(&subreq);
+		err = cbc_decrypt(subreq);
 		if (err)
 			return err;
 
 		if (req->cryptlen == AES_BLOCK_SIZE)
 			return 0;
 
-		dst = src = scatterwalk_ffwd(sg_src, req->src, subreq.cryptlen);
+		dst = src = scatterwalk_ffwd(sg_src, req->src, subreq->cryptlen);
 		if (req->dst != req->src)
 			dst = scatterwalk_ffwd(sg_dst, req->dst,
-					       subreq.cryptlen);
+					       subreq->cryptlen);
 	}
 
 	/* handle ciphertext stealing */
-	skcipher_request_set_crypt(&subreq, src, dst,
+	skcipher_request_set_crypt(subreq, src, dst,
 				   req->cryptlen - cbc_blocks * AES_BLOCK_SIZE,
 				   req->iv);
 
-	err = skcipher_walk_virt(&walk, &subreq, false);
+	err = skcipher_walk_virt(&walk, subreq, false);
 	if (err)
 		return err;
 
@@ -423,7 +421,7 @@ xts_crypt_slowpath(struct skcipher_request *req, xts_crypt_func crypt_func)
 	const struct aesni_xts_ctx *ctx = aes_xts_ctx(tfm);
 	int tail = req->cryptlen % AES_BLOCK_SIZE;
 	struct scatterlist sg_src[2], sg_dst[2];
-	struct skcipher_request subreq;
+	SKCIPHER_REQUEST_ON_STACK(subreq, tfm);
 	struct skcipher_walk walk;
 	struct scatterlist *src, *dst;
 	int err;
@@ -435,14 +433,13 @@ xts_crypt_slowpath(struct skcipher_request *req, xts_crypt_func crypt_func)
 	 * which is required for ciphertext stealing.
 	 */
 	if (tail) {
-		skcipher_request_set_tfm(&subreq, tfm);
-		skcipher_request_set_callback(&subreq,
+		skcipher_request_set_callback(subreq,
 					      skcipher_request_flags(req),
 					      NULL, NULL);
-		skcipher_request_set_crypt(&subreq, req->src, req->dst,
+		skcipher_request_set_crypt(subreq, req->src, req->dst,
 					   req->cryptlen - tail - AES_BLOCK_SIZE,
 					   req->iv);
-		req = &subreq;
+		req = subreq;
 	}
 
 	err = skcipher_walk_virt(&walk, req, false);
