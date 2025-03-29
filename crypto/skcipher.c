@@ -447,7 +447,8 @@ int crypto_skcipher_encrypt(struct skcipher_request *req)
 
 	if (crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		return -ENOKEY;
-	if (skcipher_req_on_stack(req) && skcipher_is_async(tfm))
+	if (skcipher_req_on_stack(req) && skcipher_is_async(tfm) &&
+	    !skcipher_is_mostly_sync(tfm))
 		return -EAGAIN;
 	if (alg->co.base.cra_type != &crypto_skcipher_type)
 		return crypto_lskcipher_encrypt_sg(req);
@@ -462,7 +463,8 @@ int crypto_skcipher_decrypt(struct skcipher_request *req)
 
 	if (crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		return -ENOKEY;
-	if (skcipher_req_on_stack(req) && skcipher_is_async(tfm))
+	if (skcipher_req_on_stack(req) && skcipher_is_async(tfm) &&
+	    !skcipher_is_mostly_sync(tfm))
 		return -EAGAIN;
 	if (alg->co.base.cra_type != &crypto_skcipher_type)
 		return crypto_lskcipher_decrypt_sg(req);

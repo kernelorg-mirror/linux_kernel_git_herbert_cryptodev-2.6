@@ -66,14 +66,16 @@ static int simd_skcipher_encrypt(struct skcipher_request *req)
 	struct skcipher_request *subreq;
 	struct crypto_skcipher *child;
 
+	if (!crypto_simd_usable() ||
+	    (in_atomic() && cryptd_skcipher_queued(ctx->cryptd_tfm))) {
+		if (skcipher_req_on_stack(req))
+			return -EAGAIN;
+		child = &ctx->cryptd_tfm->base;
+	} else
+		child = cryptd_skcipher_child(ctx->cryptd_tfm);
+
 	subreq = skcipher_request_ctx(req);
 	*subreq = *req;
-
-	if (!crypto_simd_usable() ||
-	    (in_atomic() && cryptd_skcipher_queued(ctx->cryptd_tfm)))
-		child = &ctx->cryptd_tfm->base;
-	else
-		child = cryptd_skcipher_child(ctx->cryptd_tfm);
 
 	skcipher_request_set_tfm(subreq, child);
 
@@ -91,9 +93,11 @@ static int simd_skcipher_decrypt(struct skcipher_request *req)
 	*subreq = *req;
 
 	if (!crypto_simd_usable() ||
-	    (in_atomic() && cryptd_skcipher_queued(ctx->cryptd_tfm)))
+	    (in_atomic() && cryptd_skcipher_queued(ctx->cryptd_tfm))) {
+		if (skcipher_req_on_stack(req))
+			return -EAGAIN;
 		child = &ctx->cryptd_tfm->base;
-	else
+	} else
 		child = cryptd_skcipher_child(ctx->cryptd_tfm);
 
 	skcipher_request_set_tfm(subreq, child);
@@ -388,7 +392,7 @@ static struct simd_aead_alg *simd_aead_create_compat(struct aead_alg *ialg,
 		     drvname) >= CRYPTO_MAX_ALG_NAME)
 		goto out_free_salg;
 
-	alg->base.cra_flags = CRYPTO_ALG_ASYNC |
+	alg->base.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_MOSTLY_SYNC |
 		(ialg->base.cra_flags & CRYPTO_ALG_INHERITED_FLAGS);
 	alg->base.cra_priority = ialg->base.cra_priority;
 	alg->base.cra_blocksize = ialg->base.cra_blocksize;

@@ -994,6 +994,11 @@ static inline bool skcipher_is_async(struct crypto_skcipher *tfm)
 	return crypto_tfm_is_async(crypto_skcipher_tfm(tfm));
 }
 
+static inline bool skcipher_is_mostly_sync(struct crypto_skcipher *tfm)
+{
+	return crypto_tfm_is_mostly_sync(crypto_skcipher_tfm(tfm));
+}
+
 static inline struct skcipher_request *skcipher_request_on_stack_init(
 	char *buf, struct crypto_skcipher *tfm)
 {

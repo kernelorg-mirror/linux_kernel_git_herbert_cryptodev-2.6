@@ -129,6 +129,12 @@
 #define CRYPTO_ALG_REQ_CHAIN		0x00040000
 
 /*
+ * Set if the algorithm is mostly synchronous and can reject on-stack
+ * requests with EAGAIN when truly asynchronous.
+ */
+#define CRYPTO_ALG_MOSTLY_SYNC		0x00080000
+
+/*
  * Transform masks and values (for crt_flags).
  */
 #define CRYPTO_TFM_NEED_KEY		0x00000001
@@ -511,6 +517,11 @@ static inline void crypto_request_set_callback(
 static inline u32 crypto_request_flags(struct crypto_async_request *req)
 {
 	return req->flags & ~CRYPTO_TFM_REQ_ON_STACK;
+}
+
+static inline bool crypto_tfm_is_mostly_sync(struct crypto_tfm *tfm)
+{
+	return tfm->__crt_alg->cra_flags & CRYPTO_ALG_MOSTLY_SYNC;
 }
 
 #endif	/* _LINUX_CRYPTO_H */
